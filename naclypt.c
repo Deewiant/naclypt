@@ -11,6 +11,9 @@
 
 #include <sodium/crypto_secretbox.h>
 
+#define LIKELY(x) __builtin_expect((x), 1)
+#define UNLIKELY(x) __builtin_expect((x), 0)
+
 #define BUFLEN (8 * 1024 * 1024)
 
 // We will store random nonce data in the zeroes in the output (guaranteed to
@@ -27,7 +30,7 @@ static size_t read_full(FILE *f, unsigned char *buf, size_t n) {
    while (r < n) {
       const size_t x = fread_unlocked(buf + r, 1, n - r, f);
       r += x;
-      if (!x)
+      if (UNLIKELY(!x))
          break;
    }
    return r;
@@ -38,13 +41,15 @@ static size_t write_full(FILE *f, unsigned char *buf, size_t n) {
    while (w < n) {
       const size_t x = fwrite_unlocked(buf + w, 1, n - w, f);
       w += x;
-      if (!x)
+      if (UNLIKELY(!x))
          break;
    }
    return w;
 }
 
-static void fill_in_nonce(unsigned char *nonce, uint_fast64_t total_read) {
+static void __attribute__ ((cold))
+   fill_in_nonce(unsigned char *nonce, uint_fast64_t total_read)
+{
    uint_fast64_t n = total_read;
    ssize_t missing = (ssize_t)crypto_secretbox_NONCEBYTES
                    - (ssize_t)crypto_secretbox_BOXZEROBYTES;
@@ -120,10 +125,10 @@ int main(int argc, char **argv) {
       // them (during decryption) and we output them at the right time (during
       // encryption).
       size_t r = read_full(stdin, ibuf + ioffset, isize);
-      if (!r)
+      if (UNLIKELY(!r))
          return 0;
 
-      if (decrypting && r <= ooffset) {
+      if (decrypting && UNLIKELY(r <= ooffset)) {
          fprintf(stderr, "Invalid input: expected at least %zu octets after "
                          "%#zx, got only %zu\n", ooffset, total_read, r);
          return 11;
@@ -132,14 +137,14 @@ int main(int argc, char **argv) {
       const bool need_new_nonce = new_nonce_in <= 0;
 
       if (decrypting) {
-         if (need_new_nonce) {
+         if (UNLIKELY(need_new_nonce)) {
             memcpy(nonce, ibuf, NONCE_RANDOMS);
             fill_in_nonce(nonce, total_read);
             memset(ibuf, 0, NONCE_RANDOMS);
-         }
-
-         for (size_t i = 0; i < crypto_secretbox_BOXZEROBYTES; ++i) {
-            if (ibuf[i]) {
+         } else {
+            for (size_t i = 0; i < crypto_secretbox_BOXZEROBYTES; ++i) {
+               if (LIKELY(!ibuf[i]))
+                  continue;
                fprintf(stderr, "Invalid input: octet %#" PRIxFAST64 " should "
                                "have been zero, not %#x\n",
                                total_read + i, ibuf[i]);
@@ -153,8 +158,10 @@ int main(int argc, char **argv) {
          new_nonce_in -= (int_fast32_t)r;
 
       } else {
-         if (need_new_nonce) {
-            if (read_full(urandom, nonce, NONCE_RANDOMS) != NONCE_RANDOMS) {
+         if (UNLIKELY(need_new_nonce)) {
+            if (UNLIKELY(read_full(urandom, nonce, NONCE_RANDOMS)
+                         != NONCE_RANDOMS))
+            {
                fprintf(stderr, "/dev/urandom failed to provide\n");
                return 1;
             }
@@ -166,16 +173,16 @@ int main(int argc, char **argv) {
          r += ioffset;
          crypto_secretbox(obuf, ibuf, r, nonce, key);
 
-         if (need_new_nonce)
+         if (UNLIKELY(need_new_nonce))
             memcpy(obuf, nonce, NONCE_RANDOMS);
       }
 
-      if (write_full(stdout, obuf + ooffset, r) != r) {
+      if (UNLIKELY(write_full(stdout, obuf + ooffset, r) != r)) {
          fputs("Could not write to stdout\n", stderr);
          return 1;
       }
 
-      if (need_new_nonce) {
+      if (UNLIKELY(need_new_nonce)) {
          // Arbitrary value but must be greater than BUFLEN.
          new_nonce_in = INT32_MAX;
       }
