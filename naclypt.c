@@ -11,6 +11,9 @@
 #include <unistd.h>
 
 #include <sodium/crypto_secretbox.h>
+#include <sodium/utils.h>
+
+#include "scrypt/crypto_scrypt.h"
 
 #define LIKELY(x) __builtin_expect((x), 1)
 #define UNLIKELY(x) __builtin_expect((x), 0)
@@ -71,27 +74,18 @@ int main(int argc, char **argv) {
               "Usage: %s infile [-d]\n"
               "\n"
               "Encrypts (with -d, decrypts) data from infile to stdout using "
-              "a key given on\nstdin. Does authenticated encryption i.e. "
-              "provides confidentiality, integrity,\nand authenticity. (Uses "
+              "a password given\non stdin. Does authenticated encryption i.e. "
+              "provides confidentiality,\nintegrity, and authenticity. (Uses "
               "libsodium's crypto_secretbox.)\n"
               "\n"
-              "key must be exactly %u octets long. Output will be all zeroes "
-              "if it's wrong.\n",
-              argc ? argv[0] : "naclypt", crypto_secretbox_KEYBYTES);
+              "The password is stretched using scrypt. The decryptor's output "
+              "will be all\nzeroes if it's wrong.\n",
+              argc ? argv[0] : "naclypt");
       return 2;
    }
 
-   unsigned char key[crypto_secretbox_KEYBYTES];
-   {
-      const size_t keylen = read_full(stdin, key, sizeof key);
-      if (keylen != sizeof key) {
-         fprintf(stderr, "Invalid key: must be %zu octets long, not %zu\n",
-                 sizeof key, keylen);
-         return 2;
-      }
-   }
-
-   if (!freopen(argv[2], "r", stdin)) {
+   FILE *input = fopen(argv[1], "r");
+   if (!input) {
       perror("Couldn't open input file");
       return 1;
    }
@@ -114,6 +108,40 @@ int main(int argc, char **argv) {
       fputs("/dev/urandom looks invalid, refusing to use it\n", stderr);
       return 3;
    }
+
+   unsigned char salt[crypto_secretbox_KEYBYTES];
+   if (decrypting) {
+      if (read_full(input, salt, sizeof salt) != sizeof salt) {
+         fprintf(stderr, "Invalid input: expected at least a %zu-octet salt\n",
+                 sizeof salt);
+         return 1;
+      }
+   } else {
+      if (read_full(urandom, salt, sizeof salt) != sizeof salt) {
+         fprintf(stderr, "/dev/urandom failed to provide\n");
+         return 3;
+      }
+      if (write_full(stdout, salt, sizeof salt) != sizeof salt) {
+         fprintf(stderr, "Couldn't write salt to stdout\n");
+         return 1;
+      }
+   }
+
+   uint8_t password[16384];
+   const size_t pwlen = read_full(stdin, password, sizeof password);
+   if (pwlen == sizeof password)
+      fprintf(stderr, "Warning: password truncated at %zu octets\n",
+              sizeof password);
+   fclose(stdin);
+
+   unsigned char key[crypto_secretbox_KEYBYTES];
+   if (crypto_scrypt(password, pwlen, salt, sizeof salt,
+                     (uint64_t)1 << 20, 24, 4, key, sizeof key))
+   {
+      perror("crypto_scrypt failed");
+      return 6;
+   }
+   sodium_memzero(password, pwlen);
 
    unsigned char *ibuf = malloc(BUFLEN),
                  *obuf = malloc(BUFLEN);
@@ -138,7 +166,7 @@ int main(int argc, char **argv) {
       // read_full is important so that we get the zero bytes when we expect
       // them (during decryption) and we output them at the right time (during
       // encryption).
-      size_t r = read_full(stdin, ibuf + ioffset, isize);
+      size_t r = read_full(input, ibuf + ioffset, isize);
       if (UNLIKELY(!r))
          return 0;
 
@@ -192,7 +220,7 @@ int main(int argc, char **argv) {
       }
 
       if (UNLIKELY(write_full(stdout, obuf + ooffset, r) != r)) {
-         fputs("Could not write to stdout\n", stderr);
+         fputs("Couldn't write ciphertext to stdout\n", stderr);
          return 1;
       }
 
