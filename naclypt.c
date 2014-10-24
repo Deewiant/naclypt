@@ -66,11 +66,11 @@ int main(int argc, char **argv) {
       return 5;
    }
 
-   if (argc < 2 | argc > 3) {
+   if (argc < 3 | argc > 4) {
       fprintf(stderr,
-              "Usage: %s key [-d]\n"
+              "Usage: %s key infile [-d]\n"
               "\n"
-              "Encrypts (with -d, decrypts) data from stdin to stdout using "
+              "Encrypts (with -d, decrypts) data from infile to stdout using "
               "the given key.\nDoes authenticated encryption i.e. provides "
               "confidentiality, integrity, and\nauthenticity. (Uses "
               "libsodium's crypto_secretbox.)\n"
@@ -87,8 +87,13 @@ int main(int argc, char **argv) {
       return 2;
    }
 
+   if (strcmp(argv[2], "-") && !freopen(argv[2], "r", stdin)) {
+      perror("Couldn't open input file");
+      return 1;
+   }
+
    const unsigned char *key = (unsigned char*)argv[1];
-   const bool decrypting = argc > 2 && !strcmp(argv[2], "-d");
+   const bool decrypting = argc > 3 && !strcmp(argv[3], "-d");
 
    FILE *urandom = fopen("/dev/urandom", "r");
    if (!urandom) {
