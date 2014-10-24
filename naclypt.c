@@ -146,6 +146,19 @@ bad_##X: \
       return 2;
    }
 
+   if (!decrypting) {
+      // http://blog.ircmaxell.com/2014/03/why-i-dont-recommend-scrypt.html
+      static const uint64_t wanted = 16*1024*1024;
+      const uint64_t scrypt_mem_usage =
+         128 * scrypt_r * (((uint64_t)1 << scrypt_logn) + scrypt_p);
+      if (scrypt_mem_usage < wanted) {
+         fprintf(stderr,
+                 "Refusing to accept woefully weak scrypt parameters:\n"
+                 "memory usage should be at least %" PRIu64 ", not %" PRIu64
+                 "\n", wanted, scrypt_mem_usage);
+      }
+   }
+
    FILE *urandom = fopen("/dev/urandom", "r");
    if (!urandom) {
       perror("Couldn't open /dev/urandom");
