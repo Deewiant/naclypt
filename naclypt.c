@@ -69,18 +69,23 @@ int main(int argc, char **argv) {
       return 5;
    }
 
-   if (argc < 2 | argc > 3) {
+   const bool decrypting = argc == 3 && !strcmp(argv[2], "-d");
+
+   if (!decrypting && argc != 5) {
+      const char *prog = argc ? argv[0] : "naclypt";
       fprintf(stderr,
-              "Usage: %s infile [-d]\n"
+              "Usage: %s infile logN r p\n"
+              "       %s infile -d\n"
               "\n"
               "Encrypts (with -d, decrypts) data from infile to stdout using "
               "a password given\non stdin. Does authenticated encryption i.e. "
               "provides confidentiality,\nintegrity, and authenticity. (Uses "
               "libsodium's crypto_secretbox.)\n"
               "\n"
-              "The password is stretched using scrypt. The decryptor's output "
-              "will be all\nzeroes if it's wrong.\n",
-              argc ? argv[0] : "naclypt");
+              "The password is stretched using scrypt(2^logN,r,p). The "
+              "decryptor's output\nwill be all zeroes if the wrong password "
+              "is given.\n",
+              prog, prog);
       return 2;
    }
 
@@ -90,7 +95,56 @@ int main(int argc, char **argv) {
       return 1;
    }
 
-   const bool decrypting = argc > 2 && !strcmp(argv[2], "-d");
+   uint8_t scrypt_logn;
+   uint32_t scrypt_r, scrypt_p;
+
+#define get_scrypt_param(X, argv_idx, unacceptable, range) do { \
+   if (decrypting) { \
+      uint8_t buf[sizeof scrypt_##X]; \
+      if (read_full(input, buf, sizeof buf) != sizeof buf) { \
+         fprintf(stderr, "Invalid input: couldn't read " #X "\n"); \
+         return 1; \
+      } \
+      scrypt_##X = 0; \
+      for (size_t i = 0; i < sizeof buf; ++i) { \
+         scrypt_##X <<= sizeof scrypt_##X > 1 ? 8 : 0; \
+         scrypt_##X += buf[i]; \
+      } \
+   } else { \
+      char *end; \
+      scrypt_##X = \
+         _Generic(scrypt_##X, \
+                  uint8_t:  (uint8_t) strtoul(argv[argv_idx], &end, 10), \
+                  uint32_t: (uint32_t)strtoul(argv[argv_idx], &end, 10)); \
+      if (*end || !*argv[argv_idx]) \
+         goto bad_##X; \
+      uint8_t buf[sizeof scrypt_##X]; \
+      for (uint32_t n = scrypt_##X, i = sizeof scrypt_##X; i--;) { \
+         buf[i] = (uint8_t)n; \
+         n >>= 8; \
+      } \
+      if (write_full(stdout, buf, sizeof buf) != sizeof buf) { \
+         fprintf(stderr, "Couldn't write " #X " to stdout\n"); \
+         return 1; \
+      } \
+   } \
+   if (unacceptable) { \
+bad_##X: \
+      fprintf(stderr, "Invalid " #X ": should be a decimal integer in the " \
+                      "range " range "\n"); \
+      return decrypting ? 1 : 2; \
+   } \
+} while (0)
+
+   get_scrypt_param(logn, 2, scrypt_logn < 2 || scrypt_logn > 63, "[2, 64)");
+   get_scrypt_param(r, 3, !scrypt_r || scrypt_r >= 1ul << 30u, "[1, 2^30)");
+   get_scrypt_param(p, 4, !scrypt_p || scrypt_p >= 1ul << 30u, "[1, 2^30)");
+
+   if ((uint64_t)scrypt_r * scrypt_p >= (uint64_t)1 << 30u) {
+      fprintf(stderr, "Invalid p and r: their product should be below 2^30, "
+                      "not %" PRIu64 "\n", (uint64_t)scrypt_r * scrypt_p);
+      return 2;
+   }
 
    FILE *urandom = fopen("/dev/urandom", "r");
    if (!urandom) {
@@ -112,8 +166,7 @@ int main(int argc, char **argv) {
    unsigned char salt[crypto_secretbox_KEYBYTES];
    if (decrypting) {
       if (read_full(input, salt, sizeof salt) != sizeof salt) {
-         fprintf(stderr, "Invalid input: expected at least a %zu-octet salt\n",
-                 sizeof salt);
+         fprintf(stderr, "Invalid input: couldn't read salt\n");
          return 1;
       }
    } else {
@@ -136,7 +189,8 @@ int main(int argc, char **argv) {
 
    unsigned char key[crypto_secretbox_KEYBYTES];
    if (crypto_scrypt(password, pwlen, salt, sizeof salt,
-                     (uint64_t)1 << 20, 24, 4, key, sizeof key))
+                     (uint64_t)1 << scrypt_logn, scrypt_r, scrypt_p,
+                     key, sizeof key))
    {
       perror("crypto_scrypt failed");
       return 6;
