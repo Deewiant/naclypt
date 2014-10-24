@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
                          != NONCE_RANDOMS))
             {
                fprintf(stderr, "/dev/urandom failed to provide\n");
-               return 1;
+               return 3;
             }
             fill_in_nonce(nonce, total_read);
          }
