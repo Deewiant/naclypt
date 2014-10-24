@@ -35,6 +35,8 @@
 
 #include "sha256.h"
 
+void memzero_ya_rly(void *, size_t);
+
 /*
  * Encode a length len/4 vector of (uint32_t) into a length len vector of
  * (unsigned char) in big-endian form.  Assumes len is a multiple of 4.
@@ -177,9 +179,10 @@ SHA256_Transform(uint32_t * state, const unsigned char block[64])
 		state[i] += S[i];
 
 	/* Clean the stack. */
-	memset(W, 0, 256);
-	memset(S, 0, 32);
-	t0 = t1 = 0;
+	memzero_ya_rly(W, sizeof W);
+	memzero_ya_rly(S, sizeof S);
+	memzero_ya_rly(&t0, sizeof t0);
+	memzero_ya_rly(&t1, sizeof t1);
 }
 
 static unsigned char PAD[64] = {
@@ -288,7 +291,7 @@ SHA256_Final(unsigned char digest[32], SHA256_CTX * ctx)
 	be32enc_vect(digest, ctx->state, 32);
 
 	/* Clear the context state */
-	memset((void *)ctx, 0, sizeof(*ctx));
+	memzero_ya_rly(ctx, sizeof *ctx);
 }
 
 /* Initialize an HMAC-SHA256 operation with the given key. */
@@ -324,7 +327,7 @@ HMAC_SHA256_Init(HMAC_SHA256_CTX * ctx, const void * _K, size_t Klen)
 	SHA256_Update(&ctx->octx, pad, 64);
 
 	/* Clean the stack. */
-	memset(khash, 0, 32);
+	memzero_ya_rly(khash, sizeof khash);
 }
 
 /* Add bytes to the HMAC-SHA256 operation. */
@@ -352,7 +355,7 @@ HMAC_SHA256_Final(unsigned char digest[32], HMAC_SHA256_CTX * ctx)
 	SHA256_Final(digest, &ctx->octx);
 
 	/* Clean the stack. */
-	memset(ihash, 0, 32);
+	memzero_ya_rly(ihash, sizeof ihash);
 }
 
 /**
@@ -409,5 +412,5 @@ PBKDF2_SHA256(const uint8_t * passwd, size_t passwdlen, const uint8_t * salt,
 	}
 
 	/* Clean PShctx, since we never called _Final on it. */
-	memset(&PShctx, 0, sizeof(HMAC_SHA256_CTX));
+	memzero_ya_rly(&PShctx, sizeof PShctx);
 }
