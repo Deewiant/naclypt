@@ -297,7 +297,7 @@ bad_##X: \
             if (UNLIKELY(read_full(urandom, nonce, NONCE_RANDOMS)
                          != NONCE_RANDOMS))
             {
-               fprintf(stderr, "/dev/urandom failed to provide\n");
+               fputs("/dev/urandom failed to provide\n", stderr);
                return 3;
             }
             fill_in_nonce(nonce, total_read);
