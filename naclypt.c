@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -60,6 +61,11 @@ static void __attribute__ ((cold))
 }
 
 int main(int argc, char **argv) {
+   if (mlockall(MCL_CURRENT | MCL_FUTURE)) {
+      perror("Couldn't mlockall");
+      return 5;
+   }
+
    if (argc < 2 | argc > 3) {
       fprintf(stderr,
               "Usage: %s key [-d]\n"
