@@ -66,13 +66,13 @@ int main(int argc, char **argv) {
       return 5;
    }
 
-   if (argc < 3 | argc > 4) {
+   if (argc < 2 | argc > 3) {
       fprintf(stderr,
-              "Usage: %s key infile [-d]\n"
+              "Usage: %s infile [-d]\n"
               "\n"
               "Encrypts (with -d, decrypts) data from infile to stdout using "
-              "the given key.\nDoes authenticated encryption i.e. provides "
-              "confidentiality, integrity, and\nauthenticity. (Uses "
+              "a key given on\nstdin. Does authenticated encryption i.e. "
+              "provides confidentiality, integrity,\nand authenticity. (Uses "
               "libsodium's crypto_secretbox.)\n"
               "\n"
               "key must be exactly %u octets long. Output will be all zeroes "
@@ -81,19 +81,22 @@ int main(int argc, char **argv) {
       return 2;
    }
 
-   if (strlen(argv[1]) != crypto_secretbox_KEYBYTES) {
-      fprintf(stderr, "Invalid key: must be %u octets long, not %zu\n",
-              crypto_secretbox_KEYBYTES, strlen(argv[1]));
-      return 2;
+   unsigned char key[crypto_secretbox_KEYBYTES];
+   {
+      const size_t keylen = read_full(stdin, key, sizeof key);
+      if (keylen != sizeof key) {
+         fprintf(stderr, "Invalid key: must be %zu octets long, not %zu\n",
+                 sizeof key, keylen);
+         return 2;
+      }
    }
 
-   if (strcmp(argv[2], "-") && !freopen(argv[2], "r", stdin)) {
+   if (!freopen(argv[2], "r", stdin)) {
       perror("Couldn't open input file");
       return 1;
    }
 
-   const unsigned char *key = (unsigned char*)argv[1];
-   const bool decrypting = argc > 3 && !strcmp(argv[3], "-d");
+   const bool decrypting = argc > 2 && !strcmp(argv[2], "-d");
 
    FILE *urandom = fopen("/dev/urandom", "r");
    if (!urandom) {
