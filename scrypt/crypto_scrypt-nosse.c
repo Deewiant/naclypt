@@ -28,7 +28,7 @@
  */
 
 /* #include "scrypt_platform.h" */
-#define HAVE_POSIX_MEMALIGN
+#define HAVE_ALIGNED_ALLOC
 
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -268,7 +268,19 @@ crypto_scrypt(const uint8_t * passwd, size_t passwdlen,
 	}
 
 	/* Allocate memory. */
-#ifdef HAVE_POSIX_MEMALIGN
+#ifdef HAVE_ALIGNED_ALLOC
+	if (!(B0 = aligned_alloc(64, 128 * r * p)))
+		goto err0;
+	B = (uint8_t *)(B0);
+	if (!(XY0 = aligned_alloc(64, 256 * r + 64)))
+		goto err1;
+	XY = (uint32_t *)(XY0);
+#ifndef MAP_ANON
+	if (!(V0 = aligned_alloc(64, 128 * r * N)))
+		goto err2;
+	V = (uint32_t *)(V0);
+#endif
+#elif defined(HAVE_POSIX_MEMALIGN)
 	if ((errno = posix_memalign(&B0, 64, 128 * r * p)) != 0)
 		goto err0;
 	B = (uint8_t *)(B0);
