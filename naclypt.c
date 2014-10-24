@@ -95,6 +95,39 @@ int main(int argc, char **argv) {
       return 1;
    }
 
+   unsigned char *ibuf = malloc(BUFLEN),
+                 *obuf = malloc(BUFLEN);
+   if (!ibuf || !obuf) {
+      perror("Couldn't malloc buffers");
+      return 4;
+   }
+
+   memcpy(obuf, crypto_secretbox_PRIMITIVE, sizeof crypto_secretbox_PRIMITIVE);
+
+   // Obfuscate it a bit.
+   for (size_t i = 0; i < sizeof crypto_secretbox_PRIMITIVE; ++i)
+      obuf[i] ^= (uint8_t)(0xffU - (i << 5));
+
+   if (decrypting) {
+      if (read_full(input, ibuf, sizeof crypto_secretbox_PRIMITIVE)
+          != sizeof crypto_secretbox_PRIMITIVE)
+      {
+         fprintf(stderr, "Invalid input: couldn't read magic\n");
+         return 1;
+      }
+      if (memcmp(ibuf, obuf, sizeof crypto_secretbox_PRIMITIVE)) {
+         fprintf(stderr, "Invalid input: bad magic (maybe bad libsodium)\n");
+         return 1;
+      }
+   } else {
+      if (write_full(stdout, obuf, sizeof crypto_secretbox_PRIMITIVE)
+          != sizeof crypto_secretbox_PRIMITIVE)
+      {
+         fprintf(stderr, "Couldn't write magic to stdout\n");
+         return 1;
+      }
+   }
+
    uint8_t scrypt_logn;
    uint32_t scrypt_r, scrypt_p;
 
@@ -209,13 +242,6 @@ bad_##X: \
       return 6;
    }
    sodium_memzero(password, pwlen);
-
-   unsigned char *ibuf = malloc(BUFLEN),
-                 *obuf = malloc(BUFLEN);
-   if (!ibuf || !obuf) {
-      perror("Couldn't malloc buffers");
-      return 4;
-   }
 
    unsigned char nonce[crypto_secretbox_NONCEBYTES];
    memset(nonce, 0, sizeof nonce);
