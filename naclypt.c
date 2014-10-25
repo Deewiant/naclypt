@@ -95,6 +95,17 @@ int main(int argc, char **argv) {
       return 1;
    }
 
+   struct stat st;
+   if (fstat(fileno(input), &st)) {
+      perror("Couldn't fstat input file");
+      return 3;
+   }
+
+   if (!S_ISREG(st.st_mode)) {
+      fprintf(stderr, "Input file doesn't look like a regular file\n");
+      return 3;
+   }
+
    unsigned char *ibuf = malloc(BUFLEN),
                  *obuf = malloc(BUFLEN);
    if (!ibuf || !obuf) {
@@ -198,13 +209,12 @@ bad_##X: \
       return 3;
    }
 
-   struct stat urstat;
-   if (fstat(fileno(urandom), &urstat)) {
+   if (fstat(fileno(urandom), &st)) {
       perror("Couldn't fstat /dev/urandom");
       return 3;
    }
 
-   if (!(S_ISCHR(urstat.st_mode) && urstat.st_rdev == makedev(1, 9))) {
+   if (!(S_ISCHR(st.st_mode) && st.st_rdev == makedev(1, 9))) {
       fputs("/dev/urandom looks invalid, refusing to use it\n", stderr);
       return 3;
    }
