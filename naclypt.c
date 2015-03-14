@@ -101,8 +101,8 @@ int main(int argc, char **argv) {
       return 3;
    }
 
-   if (!S_ISREG(st.st_mode)) {
-      fprintf(stderr, "Input file doesn't look like a regular file\n");
+   if (S_ISDIR(st.st_mode)) {
+      fprintf(stderr, "Input file looks like a directory\n");
       return 3;
    }
 
