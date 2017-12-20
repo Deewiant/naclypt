@@ -1,5 +1,4 @@
 #define _DEFAULT_SOURCE
-#define _BSD_SOURCE 1
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -7,7 +6,7 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/types.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 #include <argon2.h>
@@ -304,7 +303,7 @@ bad_##X: \
             }
          }
 
-         crypto_secretbox_open(obuf, ibuf, r, nonce, key);
+         (void) crypto_secretbox_open(obuf, ibuf, r, nonce, key);
          r -= ooffset;
          total_read += r;
          new_nonce_in -= (int_fast32_t)r;
