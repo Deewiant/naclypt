@@ -10,10 +10,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <argon2.h>
 #include <sodium/crypto_secretbox.h>
-#include <sodium/utils.h>
-
-#include "scrypt/crypto_scrypt.h"
 
 #define LIKELY(x) __builtin_expect((x), 1)
 #define UNLIKELY(x) __builtin_expect((x), 0)
@@ -74,7 +72,7 @@ int main(int argc, char **argv) {
    if (!decrypting && argc != 5) {
       const char *prog = argc ? argv[0] : "naclypt";
       fprintf(stderr,
-              "Usage: %s infile logN r p\n"
+              "Usage: %s infile logM t p\n"
               "       %s infile -d\n"
               "\n"
               "Encrypts (with -d, decrypts) data from infile to stdout using "
@@ -82,7 +80,7 @@ int main(int argc, char **argv) {
               "provides confidentiality,\nintegrity, and authenticity. (Uses "
               "libsodium's crypto_secretbox.)\n"
               "\n"
-              "The password is stretched using scrypt(2^logN,r,p). The "
+              "The password is stretched using argon2(2^logM,t,p). The "
               "decryptor's output\nwill be all zeroes if the wrong password "
               "is given.\n",
               prog, prog);
@@ -117,7 +115,7 @@ int main(int argc, char **argv) {
 
    // Obfuscate it a bit.
    for (size_t i = 0; i < sizeof crypto_secretbox_PRIMITIVE; ++i)
-      obuf[i] ^= (uint8_t)(0xffU - (i << 5));
+      obuf[i] ^= (uint8_t)(0xeeU + (i << 5));
 
    if (decrypting) {
       if (read_full(input, ibuf, sizeof crypto_secretbox_PRIMITIVE)
@@ -139,31 +137,31 @@ int main(int argc, char **argv) {
       }
    }
 
-   uint8_t scrypt_logn;
-   uint32_t scrypt_r, scrypt_p;
+   uint8_t argon2_logm;
+   uint32_t argon2_t, argon2_parallelism;
 
-#define get_scrypt_param(X, argv_idx, unacceptable, range) do { \
+#define get_argon2_param(X, argv_idx, unacceptable, range) do { \
    if (decrypting) { \
-      uint8_t buf[sizeof scrypt_##X]; \
+      uint8_t buf[sizeof argon2_##X]; \
       if (read_full(input, buf, sizeof buf) != sizeof buf) { \
          fprintf(stderr, "Invalid input: couldn't read " #X "\n"); \
          return 1; \
       } \
-      scrypt_##X = 0; \
+      argon2_##X = 0; \
       for (size_t i = 0; i < sizeof buf; ++i) { \
-         scrypt_##X <<= sizeof scrypt_##X > 1 ? 8 : 0; \
-         scrypt_##X += buf[i]; \
+         argon2_##X <<= sizeof argon2_##X > 1 ? 8 : 0; \
+         argon2_##X += buf[i]; \
       } \
    } else { \
       char *end; \
-      scrypt_##X = \
-         _Generic(scrypt_##X, \
+      argon2_##X = \
+         _Generic(argon2_##X, \
                   uint8_t:  (uint8_t) strtoul(argv[argv_idx], &end, 10), \
                   uint32_t: (uint32_t)strtoul(argv[argv_idx], &end, 10)); \
       if (*end || !*argv[argv_idx]) \
          goto bad_##X; \
-      uint8_t buf[sizeof scrypt_##X]; \
-      for (uint32_t n = scrypt_##X, i = sizeof scrypt_##X; i--;) { \
+      uint8_t buf[sizeof argon2_##X]; \
+      for (uint32_t n = argon2_##X, i = sizeof argon2_##X; i--;) { \
          buf[i] = (uint8_t)n; \
          n >>= 8; \
       } \
@@ -180,27 +178,16 @@ bad_##X: \
    } \
 } while (0)
 
-   get_scrypt_param(logn, 2, scrypt_logn < 2 || scrypt_logn > 63, "[2, 64)");
-   get_scrypt_param(r, 3, !scrypt_r || scrypt_r >= 1ul << 30u, "[1, 2^30)");
-   get_scrypt_param(p, 4, !scrypt_p || scrypt_p >= 1ul << 30u, "[1, 2^30)");
+   get_argon2_param(logm, 2, argon2_logm < 2 || argon2_logm >= 32, "[2, 32)");
 
-   if ((uint64_t)scrypt_r * scrypt_p >= (uint64_t)1 << 30u) {
-      fprintf(stderr, "Invalid p and r: their product should be below 2^30, "
-                      "not %" PRIu64 "\n", (uint64_t)scrypt_r * scrypt_p);
+   // Empirically validated ranges using the argon2 CLI.
+   get_argon2_param(t, 3, !argon2_t, "[1, 2^32)");
+   get_argon2_param(parallelism, 4, !argon2_parallelism || argon2_parallelism >= 1ul << 24u, "[1, 2^24)");
+   if ((uint64_t)1 << argon2_logm < (uint64_t)argon2_parallelism * 8) {
+      fprintf(stderr, "Invalid logM %" PRIu8 " and p %" PRIu32 ":\n"
+                      "8 KiB is needed for each level of parallelism\n",
+                      argon2_logm, argon2_parallelism);
       return 2;
-   }
-
-   if (!decrypting) {
-      // http://blog.ircmaxell.com/2014/03/why-i-dont-recommend-scrypt.html
-      static const uint64_t wanted = 16*1024*1024;
-      const uint64_t scrypt_mem_usage =
-         128 * scrypt_r * (((uint64_t)1 << scrypt_logn) + scrypt_p);
-      if (scrypt_mem_usage < wanted) {
-         fprintf(stderr,
-                 "Refusing to accept woefully weak scrypt parameters:\n"
-                 "memory usage should be at least %" PRIu64 ", not %" PRIu64
-                 "\n", wanted, scrypt_mem_usage);
-      }
    }
 
    FILE *urandom = fopen("/dev/urandom", "r");
@@ -237,21 +224,41 @@ bad_##X: \
    }
 
    uint8_t password[16384];
-   const size_t pwlen = read_full(stdin, password, sizeof password);
+   const uint32_t pwlen = (uint32_t)read_full(stdin, password, sizeof password);
    if (pwlen == sizeof password)
       fprintf(stderr, "Warning: password truncated at %zu octets\n",
               sizeof password);
    fclose(stdin);
 
    unsigned char key[crypto_secretbox_KEYBYTES];
-   if (crypto_scrypt(password, pwlen, salt, sizeof salt,
-                     (uint64_t)1 << scrypt_logn, scrypt_r, scrypt_p,
-                     key, sizeof key))
-   {
-      perror("crypto_scrypt failed");
+
+   argon2_context argon2_ctx = {
+      .out = key,
+      .outlen = sizeof key,
+      .pwd = password,
+      .pwdlen = pwlen,
+      .salt = salt,
+      .saltlen = sizeof salt,
+      .secret = NULL,
+      .secretlen = 0,
+      .ad = NULL,
+      .adlen = 0,
+      .t_cost = argon2_t,
+      .m_cost = (uint32_t)1 << argon2_logm,
+      .lanes = argon2_parallelism,
+      .threads = argon2_parallelism,
+      .version = ARGON2_VERSION_13,
+      .allocate_cbk = NULL,
+      .free_cbk = NULL,
+      .flags = ARGON2_FLAG_CLEAR_PASSWORD,
+   };
+
+   const int argon2_status = argon2i_ctx(&argon2_ctx);
+   if (argon2_status != ARGON2_OK) {
+      fprintf(stderr, "argon2i failed: %s\n",
+              argon2_error_message(argon2_status));
       return 6;
    }
-   sodium_memzero(password, pwlen);
 
    unsigned char nonce[crypto_secretbox_NONCEBYTES];
    memset(nonce, 0, sizeof nonce);
